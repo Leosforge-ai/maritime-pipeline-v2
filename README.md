@@ -17,26 +17,26 @@ A professional-grade, cloud-native data pipeline that transforms raw NOAA AIS pi
 1. **Environment Setup**:
    ```bash
    export MOTHERDUCK_TOKEN="your_token_here"
-   pip install -e ".[dev]"
+   uv sync --group dev        # installs runtime + dev tooling (ruff, mypy, pytest, pre-commit)
    ```
 
 2. **Run Pipeline (Manual Backfill)**:
    ```bash
    # Ingest entire year of 2025
-   python src/ingest_motherduck.py --year 2025
+   uv run python src/ingest_motherduck.py --year 2025
 
    # Ingest specific month
-   python src/ingest_motherduck.py --year 2025 --month 1
+   uv run python src/ingest_motherduck.py --year 2025 --month 1
 
    # Transform data (Silver -> Gold)
-   dbt build --target prod
+   uv run dbt build --target prod
    ```
 
 3. **Run Pipeline (Daily Automation)**:
    ```bash
    # Defaults to yesterday's data
-   python src/ingest_motherduck.py
-   dbt build --target prod
+   uv run python src/ingest_motherduck.py
+   uv run dbt build --target prod
    ```
 
 ## 🧪 Testing

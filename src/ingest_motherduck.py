@@ -1,24 +1,26 @@
 # src/ingest_motherduck.py
-import os
 import argparse
-import logging
-import time
 import io
+import logging
+import os
 import pickle
-from pathlib import Path
-import zstandard as zstd
-import polars as pl
-import numpy as np
-import duckdb
-import requests
-from datetime import datetime, timedelta, timezone
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+import duckdb
+import numpy as np
+import polars as pl
+import requests
+import zstandard as zstd
 from scipy.spatial import KDTree
+
+from src.constants import PORT_FUNCTION_FILTER, PORT_STATUS_CODES
 
 # We import simple utils, ignoring the Modal decorators in the original file
 # effectively
 from src.geospacial import to_radians
-from src.constants import PORT_STATUS_CODES, PORT_FUNCTION_FILTER
 
 # --- CONFIG ---
 MD_CONN_STR = "md:"
@@ -50,10 +52,10 @@ def retry_request(url, headers=None, retries=3, stream=False):
             if resp.status_code == 200:
                 return resp
             logger.warning(
-                f"Attempt {attempt+1}/{retries} failed for {url}: Status {resp.status_code}"
+                f"Attempt {attempt + 1}/{retries} failed for {url}: Status {resp.status_code}"
             )
         except Exception as e:
-            logger.warning(f"Attempt {attempt+1}/{retries} error for {url}: {e}")
+            logger.warning(f"Attempt {attempt + 1}/{retries} error for {url}: {e}")
 
         if attempt < retries - 1:
             time.sleep(2**attempt)  # Exponential backoff
@@ -331,7 +333,7 @@ def load_ports_for_kdtree(con):
 
 def fetch_and_filter_ais(year, month, day, tree, port_locodes, port_names):
     date_str = f"{year}-{month:02d}-{day:02d}"
-    url = f"https://coast.noaa.gov/htdata/CMSP/AISDataHandler/{year}/" f"ais-{date_str}.csv.zst"
+    url = f"https://coast.noaa.gov/htdata/CMSP/AISDataHandler/{year}/ais-{date_str}.csv.zst"
     logger.info(f"⬇️ Streaming AIS data from {url}...")
 
     csv_buffer = None

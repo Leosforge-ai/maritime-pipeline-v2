@@ -1,9 +1,9 @@
 # .github/workflows/pipeline.yml
 name: Maritime Data Pipeline
 
-#on:
-#  schedule:
-#    - cron: '0 0 * * *'  # Run daily at midnight UTC
+on:
+  # schedule:
+  #   - cron: '0 0 * * *'  # daily at midnight UTC (disabled)
   workflow_dispatch:
     inputs:
       year:
@@ -30,16 +30,13 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-          cache: 'pip'
 
       - name: Install Python Dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install .
+        run: uv sync --frozen
 
       - name: 1. Ingest AIS Data (Extract & Load)
         env: # Inputs mapped to env vars
@@ -48,7 +45,7 @@ jobs:
           DAY: ${{ inputs.day }}
         run: |
           # Construct command based on inputs
-          CMD="python -m src.ingest_motherduck"
+          CMD="uv run python -m src.ingest_motherduck"
 
           if [ -n "$YEAR" ]; then CMD="$CMD --year $YEAR"; fi
           if [ -n "$MONTH" ]; then CMD="$CMD --month $MONTH"; fi
@@ -59,13 +56,13 @@ jobs:
 
       - name: 2. Transform Data (dbt)
         run: |
-          dbt deps
-          dbt build --profiles-dir . --target prod
+          uv run dbt deps
+          uv run dbt build --profiles-dir . --target prod
 
       - name: 2b. Upload Operations Metadata
         if: always() # Runs even if dbt fails
         run: |
-          python src/upload_artifacts.py
+          uv run python src/upload_artifacts.py
 
       - name: Set up Node.js
         uses: actions/setup-node@v4

@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict
+from typing import Dict, Optional
 
 
 @dataclass
@@ -18,8 +18,8 @@ class PathConfig:
 
 @dataclass
 class ModalConfig:
-    memory_mb: Dict[str, int] = None
-    timeout_seconds: Dict[str, int] = None
+    memory_mb: Optional[Dict[str, int]] = None
+    timeout_seconds: Optional[Dict[str, int]] = None
 
     def __post_init__(self):
         if not self.memory_mb:
@@ -38,8 +38,8 @@ class ModalConfig:
 
 @dataclass
 class AppSettings:
-    paths: PathConfig = None
-    modal: ModalConfig = None
+    paths: Optional[PathConfig] = None
+    modal: Optional[ModalConfig] = None
 
     def __post_init__(self):
         self.paths = self.paths or PathConfig()
