@@ -1,0 +1,16 @@
+name: Add issues to project board
+
+# Auto-adds every new/reopened/transferred issue to this repo's org project board.
+# Requires org-level Actions secret ADD_TO_PROJECT_PAT (PAT with project + repo scope).
+on:
+  issues:
+    types: [opened, reopened, transferred]
+
+jobs:
+  add-to-project:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/add-to-project@v1.0.2
+        with:
+          project-url: https://github.com/orgs/Leosforge-ai/projects/10
+          github-token: ${{ secrets.ADD_TO_PROJECT_PAT }}
