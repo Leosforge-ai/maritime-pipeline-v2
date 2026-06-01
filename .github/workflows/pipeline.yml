@@ -1,9 +1,9 @@
 # .github/workflows/pipeline.yml
 name: Maritime Data Pipeline
 
-#on:
-#  schedule:
-#    - cron: '0 0 * * *'  # Run daily at midnight UTC
+on:
+  # schedule:
+  #   - cron: '0 0 * * *'  # daily at midnight UTC (disabled)
   workflow_dispatch:
     inputs:
       year:
