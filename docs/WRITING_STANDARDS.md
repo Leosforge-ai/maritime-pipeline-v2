@@ -5,7 +5,7 @@
 
 ## Title format (issues, commits, PRs)
 
-```
+```text
 type(scope): imperative description
 ```
 
@@ -16,7 +16,7 @@ type(scope): imperative description
 
 ## Commit trailers
 
-```
+```text
 Co-Authored-By: Claude <model> <noreply@anthropic.com>
 ```
 
