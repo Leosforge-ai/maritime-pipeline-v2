@@ -7,6 +7,7 @@ locally before CI does.
 `/pr-review [PR_NUMBER]`
 
 If PR_NUMBER is omitted, detect the open PR for the current branch:
+
 ```bash
 gh pr view --json number -q .number
 ```
