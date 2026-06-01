@@ -22,3 +22,6 @@ dist/
 build/
 *.egg-info/
 node_modules
+
+# CodeReview graph (local, per-developer; see company-os integrations/code-review-graph.md)
+.code-review-graph/
