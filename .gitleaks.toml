@@ -1,0 +1,14 @@
+title = "gitleaks configuration for maritime-pipeline-v2"
+
+[allowlist]
+description = "Ignore virtualenv, node, build, and local data artifacts"
+paths = [
+  "^\\.venv/",
+  "^node_modules/",
+  "^\\.evidence/",
+  "^reports/",
+  "^data/",
+]
+files = [
+  "^\\.env\\.example$",
+]

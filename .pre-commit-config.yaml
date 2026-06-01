@@ -1,3 +1,4 @@
+# Install: uv run pre-commit install && git config core.hooksPath .githooks
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v4.5.0
@@ -7,12 +8,52 @@ repos:
       - id: check-yaml
       - id: check-added-large-files
 
-  - repo: https://github.com/psf/black
-    rev: 24.3.0
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.6.9
     hooks:
-      - id: black
+      - id: ruff
+        args: ["--fix"]
+        stages: [pre-commit]
+        files: '\.py$'
+      - id: ruff-format
+        stages: [pre-commit]
+        files: '\.py$'
+      - id: ruff
+        stages: [pre-push]
+        files: '\.py$'
 
-  - repo: https://github.com/pycqa/flake8
-    rev: 7.0.0
+  - repo: https://github.com/DavidAnson/markdownlint-cli2
+    rev: v0.12.1
     hooks:
-      - id: flake8
+      - id: markdownlint-cli2
+        types: [markdown]
+
+  - repo: local
+    hooks:
+      - id: mypy
+        name: mypy type check
+        language: system
+        entry: uv run mypy src
+        pass_filenames: false
+        types: [python]
+        stages: [pre-push]
+
+      - id: commit-msg-format
+        name: commit message format
+        language: script
+        entry: .githooks/check-commit-msg.sh
+        stages: [commit-msg]
+        pass_filenames: true
+
+      - id: gitleaks
+        name: gitleaks (staged diff)
+        entry: |
+          bash -c 'if command -v gitleaks >/dev/null 2>&1; then
+            git diff --cached | gitleaks detect --pipe --redact
+          else
+            git diff --cached | docker run --rm -i zricethezav/gitleaks:latest detect --pipe --redact
+          fi'
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-commit, pre-push]

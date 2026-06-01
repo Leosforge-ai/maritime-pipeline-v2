@@ -1,0 +1,15 @@
+{
+  // Minimal high-value ruleset (company standard): blank lines around fences (MD031),
+  // language on fences (MD040). Ignore generated/vendored output.
+  "config": {
+    "default": false,
+    "MD031": true,
+    "MD040": true
+  },
+  "ignores": [
+    "node_modules/**",
+    ".venv/**",
+    ".evidence/**",
+    "reports/**"
+  ]
+}
