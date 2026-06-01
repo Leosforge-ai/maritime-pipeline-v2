@@ -1,0 +1,51 @@
+name: Automated PR Review
+
+# Cody (correctness/security/coverage) + Dalton (SQL/data-layer QA) review every PR.
+# Replaces CodeRabbit. Requires org Actions secret CLAUDE_CODE_OAUTH_TOKEN.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  review:
+    name: Cody + Dalton review
+    runs-on: ubuntu-latest
+    if: ${{ !contains(fromJSON('["bot", "github-actions[bot]", "dependabot[bot]"]'), github.event.pull_request.user.login) }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+
+      - uses: anthropics/claude-code-action@476e359e6203e73dad705c8b322e333fabbd7416 # v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          direct_prompt: |
+            Review PR #${{ github.event.pull_request.number }} in ${{ github.repository }}
+            — the AIS Voyage Engine (Polars/DuckDB/MotherDuck + dbt + Modal + Evidence).
+
+            Scope filter: review only code files (.py, .sql, .yml, .yaml, .toml).
+            Skip .md/images. Get the diff via
+            `gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files`.
+
+            **As Cody** — correctness (broken imports, wrong signatures, error handling),
+            security (secrets exposure incl. MOTHERDUCK_TOKEN, supply-chain, unpinned actions),
+            and test-coverage gaps. Verify each finding against the actual code; cite file:line.
+
+            **As Dalton** (data layer — this repo has one) — review SQL/dbt models and data-layer
+            Python: join correctness and fan-out risk, primary-key strategy (missing PK = CRITICAL),
+            DuckDB/MotherDuck connection hygiene (`md:`), no pandas in `src/` pipeline code
+            (Polars/DuckDB-first; pandas only in dbt Python models), freshness/completeness.
+
+            Aggregate into:
+            ## Automated PR Review — #${{ github.event.pull_request.number }}
+            ### CRITICAL
+            ### HIGH
+            ### MEDIUM
+            ### LOW
+            REQUEST_CHANGES if any CRITICAL/HIGH/MEDIUM exists, else APPROVE. Be concise.
