@@ -40,6 +40,21 @@ enriched maritime voyage insights, on a medallion architecture.
 
 ---
 
+## Code Review Graph Tools
+
+This repo has a `code-review-graph` MCP server (`.mcp.json`). When the graph is available, prefer
+its tools **before** Grep/Glob/Read — they are faster, cheaper, and give structural context:
+`detect_changes` (review a diff), `get_review_context` (snippets), `get_impact_radius` (blast
+radius), `query_graph` (callers/callees/imports/`tests_for`), `semantic_search_nodes`. The local
+`graph.db` is gitignored and built per developer; fall back to Grep/Read when the graph isn't
+present. See company-os `integrations/code-review-graph.md`.
+
+## Secrets
+
+`MOTHERDUCK_TOKEN` comes from `.env` (gitignored) — copy `.env.example`. As a fallback, inject from
+1Password: `op run --env-file=.env.1p -- <command>` (`.env.1p` holds `op://` references, not values).
+1Password is optional, not required. Never commit real secrets.
+
 ## GitHub Issue Completion Protocol
 
 When the task is tied to a GitHub issue: 1) save outputs; 2) branch `<type>/<slug>` (never `main`);
