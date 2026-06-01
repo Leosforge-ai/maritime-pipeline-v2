@@ -1,8 +1,9 @@
+import json
+import logging
+import warnings
+
 import pandas as pd
 import searoute
-import json
-import warnings
-import logging
 
 
 def model(dbt, con):
