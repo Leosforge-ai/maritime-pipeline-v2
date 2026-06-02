@@ -22,3 +22,9 @@ CodeRabbit); pinned-SHA CI. Dependency audit (Rico) found the set already lean �
 missing `modal` declaration; kept `pyarrow` (interop). dbt + Evidence toolchains untouched.
 **Pivots:** Tooling only — no pipeline logic change.
 **Outcome:** Repo aligned with company-os standards.
+
+## Phase 2 — company-os onboarding (2026-06-02)
+
+**Context:** Formally bring the repository under company-os governance.
+**Decisions:** Added `.company/` project context and aligned repo with company-wide operating standards.
+**Outcome:** Repo is officially registered and governed by company-os.
