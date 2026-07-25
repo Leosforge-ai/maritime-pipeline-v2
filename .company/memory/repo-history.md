@@ -56,12 +56,28 @@ the licensing ambiguity. Documented in the `AisstreamSource` docstring and
 README.
 
 Test evidence: `uv run ruff format --check . && uv run ruff check . && uv run
-mypy . && uv run pytest` all green (42 tests, 22 new — all websocket access
-mocked, no live key used). No `AISSTREAM_API_KEY` was present in this sandbox,
-so live end-to-end verification is blocked on Leo minting a key; manually
-confirmed the CLI's missing-key error path (`--source aisstream --dry-run`
-without the env var) points to https://aisstream.io registration.
+mypy . && uv run pytest` all green (49 tests after follow-up fixes below).
+
+**Follow-up fixes post-review/live-smoke:**
+- Cody REQUEST_CHANGES: `websockets.connect(..., open_timeout=...)`'s builtin
+  `TimeoutError` on a stalled handshake wasn't in the reconnect except-tuple —
+  a hung handshake killed the whole collection window instead of
+  reconnecting. Fixed + added a stalled-handshake reconnect test; `ws.send()`
+  also given an explicit timeout for consistency.
+- Leo minted `AISSTREAM_API_KEY` (gitignored `.env`) → ran a real 60s live
+  smoke (`--source aisstream --collect-seconds 60 --dry-run`, global bounding
+  box — CLI doesn't expose `--bbox` yet). First run surfaced a real bug:
+  aisstream's `MetaData.time_utc` is a Go `time.Time` string (trailing
+  `"+0000 UTC"`), which broke the `filter_by_port_proximity` date parser
+  shared with NOAA's plain timestamps. Fixed via
+  `AisstreamSource._normalize_time_utc()` + parametrized tests. Re-ran clean:
+  4745 `PositionReport` pings normalized in the 60s window, 220 retained
+  after the KDTree port-proximity filter, 220 rows confirmed in the local
+  dry-run DuckDB (Hamburg/Rotterdam/Busan/New York/LA/Antwerp/Long
+  Beach/Singapore via the 12-port hardcoded fallback — UN/LOCODE scraping
+  still 403s outbound, pre-existing/unrelated per #10). No MotherDuck writes.
 
 Stacks on PR #13 (`feat/ais-source-abstraction-noaa-probe`, approved,
 unmerged) — this PR's diff/base targets that branch until #13 merges.
-Evidence: maritime-pipeline-v2 #14, PR (branch `feat/aisstream-live-source`).
+Evidence: maritime-pipeline-v2 #14, PR #16 (branch
+`feat/aisstream-live-source`).
