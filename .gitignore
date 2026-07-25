@@ -9,7 +9,9 @@ __pycache__/
 # Data & Local Databases (Ignore the data folder contents)
 data/
 *.db
+*.duckdb
 *.parquet
+*.pkl
 verify.py
 
 # Modal & IDEs
