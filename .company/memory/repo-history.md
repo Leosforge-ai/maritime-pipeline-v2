@@ -30,3 +30,38 @@ Cron re-enable is explicitly OUT of scope (Leo-gated); follow-up issue tracks
 adding Finnish Digitraffic Marine as a live regional source.
 Evidence: maritime-pipeline-v2 #10, PR (branch
 `feat/ais-source-abstraction-noaa-probe`).
+
+## 2026-07-25 — aisstream.io live global AIS source (#14)
+
+Decision (Leo, per Logan's evaluation): hook aisstream.io as a second,
+live/global `AISSource` implementation behind the same abstraction added in
+#10 — a real-time supplementary layer, not a replacement for the NOAA batch
+core.
+
+Implementation: `AisstreamSource` (`src/ais_sources.py`) connects to
+`wss://stream.aisstream.io/v0/stream`, subscribes to `PositionReport` messages
+(API key via `AISSTREAM_API_KEY`), and collects for a bounded window
+(`--collect-seconds`, default 60) via `fetch()` — `available_dates()` /
+`latest_available_date()` both resolve to "today" since this is a live-only
+feed with no historical archive. Reconnects on drop within the same deadline;
+never blocks past it. `src/ingest_motherduck.py` gained `--source
+{noaa,aisstream}` and `--collect-seconds`, flowing through the existing
+port-proximity filter and `--dry-run` local DuckDB path unchanged. New dep:
+`websockets` (one new dep, pre-authorized).
+
+Licence/status: aisstream.io is a **beta service, no SLA, no published
+redistribution ToS** — per Logan's evaluation, treated as supplementary
+enrichment ONLY, never the basis of the public API/product until Leila clears
+the licensing ambiguity. Documented in the `AisstreamSource` docstring and
+README.
+
+Test evidence: `uv run ruff format --check . && uv run ruff check . && uv run
+mypy . && uv run pytest` all green (42 tests, 22 new — all websocket access
+mocked, no live key used). No `AISSTREAM_API_KEY` was present in this sandbox,
+so live end-to-end verification is blocked on Leo minting a key; manually
+confirmed the CLI's missing-key error path (`--source aisstream --dry-run`
+without the env var) points to https://aisstream.io registration.
+
+Stacks on PR #13 (`feat/ais-source-abstraction-noaa-probe`, approved,
+unmerged) — this PR's diff/base targets that branch until #13 merges.
+Evidence: maritime-pipeline-v2 #14, PR (branch `feat/aisstream-live-source`).

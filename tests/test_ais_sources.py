@@ -1,16 +1,21 @@
 """Tests for the AIS source abstraction (src/ais_sources.py).
 
-All HTTP is mocked — no live network access is used or required.
+All HTTP/websocket access is mocked — no live network access, and no live
+AISSTREAM_API_KEY, is used or required.
 """
 
+import asyncio
 import io
+import json
+import time
 import zipfile
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 
 import polars as pl
+import pytest
 import zstandard as zstd
 
-from src.ais_sources import NORMALIZED_COLUMNS, NoaaMarineCadastreSource
+from src.ais_sources import NORMALIZED_COLUMNS, AisstreamSource, NoaaMarineCadastreSource
 
 # Fixture HTML fragments mimicking NOAA's real directory-listing pages, one for a
 # "current" year published as daily .csv.zst, one for an "archived" year
@@ -233,3 +238,178 @@ def test_normalized_dataframe_is_valid_polars_dataframe():
         }
     )
     assert list(df.columns) == NORMALIZED_COLUMNS
+
+
+# --- AisstreamSource ---------------------------------------------------------
+#
+# aisstream.io is a live websocket feed (wss://stream.aisstream.io/v0/stream), not
+# a per-day archive, so tests mock `websockets.connect` rather than HTTP. No live
+# AISSTREAM_API_KEY is used or required.
+
+
+def _position_report(mmsi=368382440, lat=36.96, lon=-76.43, name="PATRICIA B. MORAN"):
+    return json.dumps(
+        {
+            "MessageType": "PositionReport",
+            "MetaData": {
+                "MMSI": mmsi,
+                "ShipName": name,
+                "time_utc": "2026-07-25 12:00:00 +0000 UTC",
+            },
+            "Message": {"PositionReport": {"Latitude": lat, "Longitude": lon}},
+        }
+    )
+
+
+class FakeWebsocket:
+    """Mimics the async context-manager `websockets.connect(...)` returns.
+
+    `recv()` yields queued messages then, once exhausted, sleeps far longer than
+    any test's collect window so the deadline (not exhaustion) is what stops the
+    collector — matching real aisstream.io behavior of an idle-but-open socket.
+    """
+
+    def __init__(self, messages):
+        self._messages = list(messages)
+        self.sent: list[str] = []
+        self.closed = False
+
+    async def send(self, msg):
+        self.sent.append(msg)
+
+    async def recv(self):
+        if self._messages:
+            return self._messages.pop(0)
+        await asyncio.sleep(3600)
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        self.closed = True
+        return False
+
+
+def fake_connect(ws: FakeWebsocket):
+    def _connect(url, open_timeout=None):
+        return ws
+
+    return _connect
+
+
+def flaky_connect(exc: Exception, ws: FakeWebsocket):
+    """First call raises `exc` (simulating a dropped connection); every
+    subsequent call returns `ws` (simulating a successful reconnect)."""
+    calls = {"n": 0}
+
+    def _connect(url, open_timeout=None):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise exc
+        return ws
+
+    return _connect
+
+
+def test_missing_api_key_raises_helpful_error(monkeypatch):
+    monkeypatch.delenv("AISSTREAM_API_KEY", raising=False)
+    with pytest.raises(ValueError, match="AISSTREAM_API_KEY"):
+        AisstreamSource()
+
+
+def test_missing_api_key_error_mentions_registration():
+    with pytest.raises(ValueError, match="aisstream.io"):
+        AisstreamSource(api_key="")
+
+
+def test_fetch_normalizes_position_report(monkeypatch):
+    ws = FakeWebsocket([_position_report()])
+    monkeypatch.setattr("src.ais_sources.websockets.connect", fake_connect(ws))
+
+    source = AisstreamSource(api_key="test-key", collect_seconds=1)
+    df = source.fetch(date(2026, 7, 25))
+
+    assert df is not None
+    assert list(df.columns) == NORMALIZED_COLUMNS
+    assert df.height == 1
+    assert df["mmsi"][0] == 368382440
+    assert df["vessel_name"][0] == "PATRICIA B. MORAN"
+    assert df["imo"][0] is None
+    assert df["latitude"][0] == 36.96
+
+
+def test_fetch_subscribes_once_within_rate_limit(monkeypatch):
+    ws = FakeWebsocket([_position_report()])
+    monkeypatch.setattr("src.ais_sources.websockets.connect", fake_connect(ws))
+
+    source = AisstreamSource(api_key="test-key", collect_seconds=1)
+    source.fetch(date(2026, 7, 25))
+
+    assert len(ws.sent) == 1
+    subscribed = json.loads(ws.sent[0])
+    assert subscribed["APIKey"] == "test-key"
+    assert subscribed["FilterMessageTypes"] == ["PositionReport"]
+
+
+def test_fetch_skips_malformed_messages_without_crashing(monkeypatch):
+    ws = FakeWebsocket(
+        [
+            "not json at all",
+            json.dumps({"MessageType": "ShipStaticData"}),  # wrong type, ignored
+            json.dumps({"MessageType": "PositionReport"}),  # missing MetaData/Message
+            _position_report(mmsi=111222333, name="GHOST SHIP"),
+        ]
+    )
+    monkeypatch.setattr("src.ais_sources.websockets.connect", fake_connect(ws))
+
+    source = AisstreamSource(api_key="test-key", collect_seconds=1)
+    df = source.fetch(date(2026, 7, 25))
+
+    assert df is not None
+    assert df.height == 1
+    assert df["mmsi"][0] == 111222333
+
+
+def test_fetch_returns_none_when_nothing_collected(monkeypatch):
+    ws = FakeWebsocket([])  # recv() will just sleep past the deadline
+    monkeypatch.setattr("src.ais_sources.websockets.connect", fake_connect(ws))
+
+    source = AisstreamSource(api_key="test-key", collect_seconds=0.2)
+    df = source.fetch(date(2026, 7, 25))
+
+    assert df is None
+
+
+def test_fetch_never_exceeds_deadline(monkeypatch):
+    ws = FakeWebsocket([])  # idle socket; only the deadline should stop us
+    monkeypatch.setattr("src.ais_sources.websockets.connect", fake_connect(ws))
+
+    source = AisstreamSource(api_key="test-key", collect_seconds=0.5)
+    start = time.monotonic()
+    source.fetch(date(2026, 7, 25))
+    elapsed = time.monotonic() - start
+
+    assert elapsed < 2.0  # generous bound; real deadline is 0.5s
+
+
+def test_fetch_reconnects_after_a_dropped_connection(monkeypatch):
+    ws = FakeWebsocket([_position_report()])
+    monkeypatch.setattr(
+        "src.ais_sources.websockets.connect",
+        flaky_connect(OSError("connection reset"), ws),
+    )
+
+    source = AisstreamSource(api_key="test-key", collect_seconds=2)
+    df = source.fetch(date(2026, 7, 25))
+
+    assert df is not None
+    assert df.height == 1
+
+
+def test_available_dates_and_latest_are_always_today():
+    source = AisstreamSource(api_key="test-key")
+    today = datetime.now(timezone.utc).date()
+
+    assert source.available_dates(today - timedelta(days=1), today) == [today]
+    assert source.available_dates(today + timedelta(days=1), today + timedelta(days=2)) == []
+    assert source.latest_available_date() == today

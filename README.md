@@ -42,6 +42,18 @@ A professional-grade, cloud-native data pipeline that transforms raw NOAA AIS pi
    uv run dbt build --target prod
    ```
 
+4. **Live supplementary source (aisstream.io)**:
+
+   ```bash
+   export AISSTREAM_API_KEY="your_key_here"   # register free at https://aisstream.io
+   uv run python -m src.ingest_motherduck --source aisstream --collect-seconds 60 --dry-run
+   ```
+
+   aisstream.io is a **beta service with no SLA and no published redistribution
+   ToS** — it is a supplementary, real-time enrichment layer only, never the
+   basis of the public-facing product/API until legal clears the licensing
+   ambiguity (Leila-gated). See `src/ais_sources.py::AisstreamSource` docstring.
+
 ## 🧪 Testing
 Run the test suite locally:
 

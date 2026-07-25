@@ -14,7 +14,7 @@ import polars as pl
 import requests
 from scipy.spatial import KDTree
 
-from src.ais_sources import AISSource, NoaaMarineCadastreSource
+from src.ais_sources import AISSource, AisstreamSource, NoaaMarineCadastreSource
 from src.constants import PORT_FUNCTION_FILTER, PORT_STATUS_CODES
 
 # We import simple utils, ignoring the Modal decorators in the original file
@@ -534,9 +534,31 @@ def main():
         default=DEFAULT_DRY_RUN_PATH,
         help=f"Local DuckDB file path used with --dry-run (default: {DEFAULT_DRY_RUN_PATH}).",
     )
+    parser.add_argument(
+        "--source",
+        choices=["noaa", "aisstream"],
+        default="noaa",
+        help="AIS data source: 'noaa' (default) for the NOAA MarineCadastre daily "
+        "batch archive, or 'aisstream' for a bounded live collect from aisstream.io "
+        "(beta, supplementary only — requires AISSTREAM_API_KEY).",
+    )
+    parser.add_argument(
+        "--collect-seconds",
+        type=int,
+        default=60,
+        help="Live collection window in seconds, used only with --source aisstream (default: 60).",
+    )
     args = parser.parse_args()
 
-    source: AISSource = NoaaMarineCadastreSource()
+    if args.source == "aisstream":
+        if args.year or args.month or args.day or args.backfill_from:
+            logger.warning(
+                "--year/--month/--day/--backfill-from are ignored with --source aisstream "
+                "(it is live-only; use --collect-seconds instead)."
+            )
+        source: AISSource = AisstreamSource(collect_seconds=args.collect_seconds)
+    else:
+        source = NoaaMarineCadastreSource()
 
     con = get_db_connection(dry_run=args.dry_run, dry_run_path=args.dry_run_path)
     ensure_reference_data(con)
