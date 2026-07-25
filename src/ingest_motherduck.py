@@ -1,21 +1,20 @@
 # src/ingest_motherduck.py
 import argparse
-import io
 import logging
 import os
 import pickle
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import duckdb
 import numpy as np
 import polars as pl
 import requests
-import zstandard as zstd
 from scipy.spatial import KDTree
 
+from src.ais_sources import AISSource, NoaaMarineCadastreSource
 from src.constants import PORT_FUNCTION_FILTER, PORT_STATUS_CODES
 
 # We import simple utils, ignoring the Modal decorators in the original file
@@ -28,12 +27,19 @@ MOTHERDUCK_TOKEN = os.environ.get("MOTHERDUCK_TOKEN", "").strip()
 COUNTRIES_TABLE = "reference.countries"
 PORTS_TABLE = "reference.ports"
 RAW_AIS_TABLE = "silver.raw_ais_pings"
+DEFAULT_DRY_RUN_PATH = "dryrun_ais.duckdb"
 
 # --- LOGGING SETUP ---
 logger = logging.getLogger("ais_ingest")
 
 
-def get_db_connection():
+def get_db_connection(dry_run: bool = False, dry_run_path: str = DEFAULT_DRY_RUN_PATH):
+    """Return a DuckDB connection. In --dry-run mode this is a local file (no
+    MOTHERDUCK_TOKEN required); otherwise it's MotherDuck (`md:`)."""
+    if dry_run:
+        logger.debug(f"[dry-run] Connecting to local DuckDB file {dry_run_path}...")
+        return duckdb.connect(dry_run_path)
+
     if not MOTHERDUCK_TOKEN:
         raise ValueError("MOTHERDUCK_TOKEN not found in environment variables")
     logger.debug(f"Connecting to MotherDuck with DuckDB {duckdb.__version__}...")
@@ -331,64 +337,12 @@ def load_ports_for_kdtree(con):
     return tree, port_locodes, port_names
 
 
-def fetch_and_filter_ais(year, month, day, tree, port_locodes, port_names):
-    date_str = f"{year}-{month:02d}-{day:02d}"
-    url = f"https://coast.noaa.gov/htdata/CMSP/AISDataHandler/{year}/ais-{date_str}.csv.zst"
-    logger.info(f"⬇️ Streaming AIS data from {url}...")
+def filter_by_port_proximity(ais: pl.DataFrame, tree, port_locodes, port_names):
+    """Filter a normalized AIS DataFrame (mmsi, imo, vessel_name, latitude, longitude,
+    base_date_time) down to pings within ~5km of a known port, source-agnostic.
 
-    csv_buffer = None
-    retries = 3
-    for attempt in range(retries):
-        try:
-            # Use a new session for each attempt to avoid state issues
-            with requests.Session() as s:
-                # Use a longer timeout to accommodate large file downloads
-                resp = s.get(url, stream=True, timeout=60)
-                resp.raise_for_status()  # Check for 4xx/5xx errors
-
-                # Decompress stream in memory. The `reader.read()` call is where
-                # an IncompleteRead error can occur if the connection breaks.
-                dctx = zstd.ZstdDecompressor()
-                with dctx.stream_reader(resp.raw) as reader:
-                    csv_buffer = io.BytesIO(reader.read())
-
-                # If we successfully read, break the loop
-                logger.info("📦 Data downloaded and decompressed successfully.")
-                break
-
-        except (requests.exceptions.RequestException, zstd.ZstdError) as e:
-            # Catches connection errors, timeouts, incomplete reads, and decompression errors
-            logger.warning(
-                f"Attempt {attempt + 1}/{retries} failed to download/decompress {url}: {e}"
-            )
-            if attempt < retries - 1:
-                time.sleep(2 ** (attempt + 1))  # Exponential backoff (2, 4 seconds)
-            else:
-                logger.error(
-                    f"❌ Aborting {date_str} due to persistent download/decompression failure."
-                )
-                return None
-
-    logger.info("Parsing CSV...")
-
-    # Read with Polars (Zero local disk write)
-    try:
-        ais = pl.read_csv(
-            csv_buffer,
-            columns=[
-                "mmsi",
-                "latitude",
-                "longitude",
-                "base_date_time",
-                "vessel_name",
-                "imo",
-            ],
-            ignore_errors=True,
-        )
-    except Exception as e:
-        logger.error(f"❌ Failed to parse CSV: {e}")
-        return None
-
+    Returns None if there is nothing left after filtering.
+    """
     # Filter Nulls
     ais = ais.filter(pl.col("latitude").is_not_null() & pl.col("longitude").is_not_null())
 
@@ -442,21 +396,32 @@ def fetch_and_filter_ais(year, month, day, tree, port_locodes, port_names):
     return filtered_ais
 
 
-def process_date(target_date, tree, locodes, names):
-    """Ingests a single day of data."""
-    logger.info(f"🚀 Starting Ingest for {target_date.date()}")
+def process_date(
+    source: AISSource,
+    target_date: date,
+    tree,
+    locodes,
+    names,
+    dry_run: bool = False,
+    dry_run_path: str = DEFAULT_DRY_RUN_PATH,
+):
+    """Ingests a single day of data. Never raises — logs and returns on any failure
+    so one bad/missing day never aborts the whole run."""
+    logger.info(f"🚀 Starting Ingest for {target_date}")
 
     # Create a fresh connection for this thread to ensure thread safety
-    con = get_db_connection()
+    con = get_db_connection(dry_run=dry_run, dry_run_path=dry_run_path)
     try:
-        df_filtered = fetch_and_filter_ais(
-            target_date.year, target_date.month, target_date.day, tree, locodes, names
-        )
+        raw = source.fetch(target_date)
+        if raw is None:
+            logger.warning(f"⚠️ No data published for {target_date} (source returned nothing).")
+            return
+
+        df_filtered = filter_by_port_proximity(raw, tree, locodes, names)
 
         if df_filtered is not None and not df_filtered.is_empty():
-            logger.info(
-                f"📤 Uploading {df_filtered.height} rows for {target_date.date()} to MotherDuck..."
-            )
+            dest = "local dry-run DB" if dry_run else "MotherDuck"
+            logger.info(f"📤 Uploading {df_filtered.height} rows for {target_date} to {dest}...")
 
             # Ensure table exists (idempotent)
             con.execute(
@@ -476,13 +441,68 @@ def process_date(target_date, tree, locodes, names):
 
             # Insert Data
             con.sql(f"INSERT INTO {RAW_AIS_TABLE} SELECT *, CURRENT_TIMESTAMP FROM df_filtered")
-            logger.info(f"🎉 Ingestion Complete for {target_date.date()}.")
+            logger.info(f"🎉 Ingestion Complete for {target_date}.")
         else:
-            logger.info(f"⚠️ No data to ingest for {target_date.date()}.")
+            logger.info(f"⚠️ No data to ingest for {target_date}.")
     except Exception as e:
-        logger.error(f"❌ Failed to process {target_date.date()}: {e}")
+        # Log and continue: one missing/broken day must never crash the whole backfill.
+        logger.error(f"❌ Failed to process {target_date}: {e}")
     finally:
         con.close()
+
+
+def resolve_dates_to_process(
+    source: AISSource,
+    args: argparse.Namespace,
+    today: date | None = None,
+) -> list[date]:
+    """Availability-aware date resolution.
+
+    - Explicit --year/--month/--day: process exactly that range (unchanged
+      behavior), regardless of what the source reports as "available" — missing
+      days within the range are simply skipped (logged) by process_date.
+    - --backfill-from YYYY-MM-DD: ingest every date the source has actually
+      published between that date and the latest available date (inclusive).
+    - Default (nothing given): probe the source for its single latest
+      available date. NOAA publication lags real time by months, so this is
+      *not* "yesterday" — see NoaaMarineCadastreSource docstring.
+    """
+    today = today or datetime.now(timezone.utc).date()
+
+    if args.year and args.month and args.day:
+        d = date(args.year, args.month, args.day)
+        return [d] if d <= today else []
+
+    if args.year and args.month:
+        start = date(args.year, args.month, 1)
+        if args.month == 12:
+            end = date(args.year, 12, 31)
+        else:
+            end = date(args.year, args.month + 1, 1) - timedelta(days=1)
+        end = min(end, today)
+        return [start + timedelta(days=n) for n in range((end - start).days + 1)]
+
+    if args.year:
+        start = date(args.year, 1, 1)
+        end = min(date(args.year, 12, 31), today)
+        return [start + timedelta(days=n) for n in range((end - start).days + 1)]
+
+    if args.backfill_from:
+        backfill_start = datetime.strptime(args.backfill_from, "%Y-%m-%d").date()
+        latest = source.latest_available_date(not_after=today)
+        if latest is None:
+            logger.error("Could not determine latest available date from source; aborting.")
+            return []
+        logger.info(f"📅 Backfilling published dates from {backfill_start} through {latest}...")
+        return source.available_dates(since=backfill_start, until=latest)
+
+    # Default: single most recent published date (NOT "yesterday" — probe the source).
+    latest = source.latest_available_date(not_after=today)
+    if latest is None:
+        logger.error("Could not determine latest available date from source; aborting.")
+        return []
+    logger.info(f"📅 Latest available date from source: {latest}")
+    return [latest]
 
 
 def main():
@@ -495,9 +515,30 @@ def main():
     parser.add_argument("--year", type=int, help="Year (YYYY)")
     parser.add_argument("--month", type=int, help="Month (1-12)")
     parser.add_argument("--day", type=int, help="Day (1-31)")
+    parser.add_argument(
+        "--backfill-from",
+        type=str,
+        default=None,
+        metavar="YYYY-MM-DD",
+        help="Ingest every published date from this date through the source's latest "
+        "available date (gap backfill).",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Write to a local DuckDB file instead of MotherDuck. No MOTHERDUCK_TOKEN needed.",
+    )
+    parser.add_argument(
+        "--dry-run-path",
+        type=str,
+        default=DEFAULT_DRY_RUN_PATH,
+        help=f"Local DuckDB file path used with --dry-run (default: {DEFAULT_DRY_RUN_PATH}).",
+    )
     args = parser.parse_args()
 
-    con = get_db_connection()
+    source: AISSource = NoaaMarineCadastreSource()
+
+    con = get_db_connection(dry_run=args.dry_run, dry_run_path=args.dry_run_path)
     ensure_reference_data(con)
     tree, locodes, names = load_ports_for_kdtree(con)
 
@@ -514,43 +555,31 @@ def main():
     )
     con.close()  # Close main connection, threads will open their own
 
-    # Date Logic
-    if args.year and args.month and args.day:
-        start_date = datetime(args.year, args.month, args.day, tzinfo=timezone.utc)
-        end_date = start_date
-    elif args.year and args.month:
-        start_date = datetime(args.year, args.month, 1, tzinfo=timezone.utc)
-        # Logic to find last day of month
-        if args.month == 12:
-            end_date = datetime(args.year, 12, 31, tzinfo=timezone.utc)
-        else:
-            end_date = datetime(args.year, args.month + 1, 1, tzinfo=timezone.utc) - timedelta(
-                days=1
-            )
-    elif args.year:
-        start_date = datetime(args.year, 1, 1, tzinfo=timezone.utc)
-        end_date = datetime(args.year, 12, 31, tzinfo=timezone.utc)
-    else:
-        # Default: Yesterday
-        start_date = datetime.now(timezone.utc) - timedelta(days=1)
-        end_date = start_date
+    dates_to_process = resolve_dates_to_process(source, args)
+    if not dates_to_process:
+        logger.warning("⚠️ No dates to process.")
+        return
 
-    # Prevent future dates
-    if end_date > datetime.now(timezone.utc):
-        end_date = datetime.now(timezone.utc) - timedelta(days=1)
-
-    logger.info(f"📅 Running pipeline from {start_date.date()} to {end_date.date()}")
-
-    # Generate list of dates to process
-    dates_to_process = []
-    curr = start_date
-    while curr <= end_date:
-        dates_to_process.append(curr)
-        curr += timedelta(days=1)
+    logger.info(
+        f"📅 Processing {len(dates_to_process)} date(s): "
+        f"{dates_to_process[0]}..{dates_to_process[-1]}"
+    )
 
     # Process in parallel (Max 2 workers to prevent OOM on 7GB RAM runners)
     with ThreadPoolExecutor(max_workers=2) as executor:
-        futures = [executor.submit(process_date, d, tree, locodes, names) for d in dates_to_process]
+        futures = [
+            executor.submit(
+                process_date,
+                source,
+                d,
+                tree,
+                locodes,
+                names,
+                args.dry_run,
+                args.dry_run_path,
+            )
+            for d in dates_to_process
+        ]
         for fut in as_completed(futures):
             try:
                 fut.result()
