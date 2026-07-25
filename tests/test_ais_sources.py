@@ -180,9 +180,7 @@ def test_fetch_zip_normalizes_columns():
         "PILOT BOAT SPRING PT,,WDB8945,90,0,0,0,0.0,90,A\n"
     )
     url = "https://coast.noaa.gov/htdata/CMSP/AISDataHandler/2024/AIS_2024_01_01.zip"
-    session = FakeSession(
-        {url: FakeResponse(content=zip_bytes("AIS_2024_01_01.csv", csv_text))}
-    )
+    session = FakeSession({url: FakeResponse(content=zip_bytes("AIS_2024_01_01.csv", csv_text))})
     source = NoaaMarineCadastreSource(session=session)
     source._year_index_cache[2024] = {date(2024, 1, 1): "zip"}
 

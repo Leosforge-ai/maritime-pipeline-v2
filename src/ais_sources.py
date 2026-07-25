@@ -17,6 +17,7 @@ from __future__ import annotations
 import io
 import logging
 import re
+import time
 import zipfile
 from datetime import date, datetime, timezone
 from typing import Protocol
@@ -96,6 +97,9 @@ class NoaaMarineCadastreSource:
                 )
             except requests.exceptions.RequestException as e:
                 logger.warning(f"Attempt {attempt + 1}/{self._retries} error for {url}: {e}")
+
+            if attempt < self._retries - 1:
+                time.sleep(2**attempt)  # Exponential backoff (1, 2, 4, ... seconds)
         logger.error(f"Failed to fetch {url} after {self._retries} attempts.")
         return None
 
