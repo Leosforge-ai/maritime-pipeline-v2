@@ -328,7 +328,9 @@ class AisstreamSource:
                     }
                     # One subscription message per connection — well within the
                     # 1-message/sec aisstream.io rate limit even across reconnects.
-                    await ws.send(json.dumps(subscribe_msg))
+                    await asyncio.wait_for(
+                        ws.send(json.dumps(subscribe_msg)), timeout=min(5, remaining)
+                    )
 
                     while True:
                         remaining = deadline - time.monotonic()
@@ -341,7 +343,10 @@ class AisstreamSource:
                         row = self._normalize_message(raw)
                         if row is not None:
                             rows.append(row)
-            except (OSError, websockets.exceptions.WebSocketException) as e:
+            except (OSError, TimeoutError, websockets.exceptions.WebSocketException) as e:
+                # TimeoutError here covers a stalled handshake (websockets.connect's
+                # open_timeout) or a stalled subscribe send — NOT the inner recv()
+                # timeout above, which already returns rows directly on deadline.
                 logger.warning(f"aisstream.io connection error, reconnecting: {e}")
                 sleep_for = min(1.0, max(0.0, deadline - time.monotonic()))
                 if sleep_for <= 0:

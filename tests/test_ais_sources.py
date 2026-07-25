@@ -406,6 +406,22 @@ def test_fetch_reconnects_after_a_dropped_connection(monkeypatch):
     assert df.height == 1
 
 
+def test_fetch_reconnects_after_a_stalled_handshake(monkeypatch):
+    """websockets.connect(..., open_timeout=...) raises builtin TimeoutError on a
+    stalled handshake — this must trigger a reconnect, not kill the whole window."""
+    ws = FakeWebsocket([_position_report()])
+    monkeypatch.setattr(
+        "src.ais_sources.websockets.connect",
+        flaky_connect(TimeoutError("timed out during handshake"), ws),
+    )
+
+    source = AisstreamSource(api_key="test-key", collect_seconds=2)
+    df = source.fetch(date(2026, 7, 25))
+
+    assert df is not None
+    assert df.height == 1
+
+
 def test_available_dates_and_latest_are_always_today():
     source = AisstreamSource(api_key="test-key")
     today = datetime.now(timezone.utc).date()
