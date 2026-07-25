@@ -378,8 +378,22 @@ class AisstreamSource:
             return None
 
         vessel_name = (meta.get("ShipName") or "").strip() or None
-        base_date_time = meta.get("time_utc")
+        base_date_time = self._normalize_time_utc(meta.get("time_utc"))
 
         # NORMALIZED_COLUMNS order: mmsi, imo, vessel_name, latitude, longitude, base_date_time.
         # PositionReport carries no IMO number, so it's always null for this source.
         return [mmsi, None, vessel_name, latitude, longitude, base_date_time]
+
+    _TZ_SUFFIX_RE = re.compile(r"\s*[+-]\d{4}.*$")
+
+    @classmethod
+    def _normalize_time_utc(cls, time_utc: str | None) -> str | None:
+        """aisstream's ``MetaData.time_utc`` is a Go ``time.Time`` string, e.g.
+        ``"2026-07-25 12:00:00.123456 +0000 UTC"`` — a trailing UTC-offset/zone
+        suffix NOAA's plain ``"YYYY-MM-DD HH:MM:SS"`` timestamps never have.
+        Strip that suffix so the same downstream
+        ``pl.col("base_date_time").str.to_datetime(strict=False)`` parser used
+        for both sources (see ``filter_by_port_proximity``) can parse it."""
+        if not time_utc:
+            return None
+        return cls._TZ_SUFFIX_RE.sub("", time_utc).strip() or None

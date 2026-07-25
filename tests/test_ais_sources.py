@@ -336,6 +336,24 @@ def test_fetch_normalizes_position_report(monkeypatch):
     assert df["vessel_name"][0] == "PATRICIA B. MORAN"
     assert df["imo"][0] is None
     assert df["latitude"][0] == 36.96
+    # Go time.Time's " +0000 UTC" suffix must be stripped so downstream
+    # `str.to_datetime(strict=False)` (shared with NOAA) can parse it.
+    assert df["base_date_time"][0] == "2026-07-25 12:00:00"
+
+
+@pytest.mark.parametrize(
+    "time_utc,expected",
+    [
+        ("2026-07-25 12:00:00 +0000 UTC", "2026-07-25 12:00:00"),
+        ("2026-07-25 12:00:00.318996 +0000 UTC", "2026-07-25 12:00:00.318996"),
+        ("2026-07-25 12:00:00 -0500 UTC", "2026-07-25 12:00:00"),
+        ("2026-07-25 12:00:00", "2026-07-25 12:00:00"),  # already bare
+        (None, None),
+        ("", None),
+    ],
+)
+def test_normalize_time_utc_strips_go_timezone_suffix(time_utc, expected):
+    assert AisstreamSource._normalize_time_utc(time_utc) == expected
 
 
 def test_fetch_subscribes_once_within_rate_limit(monkeypatch):
