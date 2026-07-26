@@ -2,8 +2,8 @@
 name: Maritime Data Pipeline
 
 on:
-  # schedule:
-  #   - cron: '0 0 * * *'  # daily at midnight UTC (disabled)
+  schedule:
+    - cron: '0 3 * * *'  # daily at 03:00 UTC — re-enabled per #10 (availability-aware ingest + failure alerting)
   workflow_dispatch:
     inputs:
       year:
@@ -22,6 +22,10 @@ env:
   GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
   PYTHON_VERSION: '3.12'
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
+concurrency:
+  group: maritime-pipeline-${{ github.workflow }}
+  cancel-in-progress: false
 
 jobs:
   etl-pipeline:
@@ -115,3 +119,24 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4
+
+  alert-on-failure:
+    name: Alert on pipeline failure
+    needs: [etl-pipeline, deploy-pages]
+    if: failure()
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Comment on #10 with failure details
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        with:
+          script: |
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const trigger = context.eventName === 'schedule' ? 'scheduled run' : 'manual run';
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: 10,
+              body: `⚠️ Maritime pipeline failed (${trigger}). See run: ${runUrl}`,
+            });
