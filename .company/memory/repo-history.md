@@ -81,3 +81,26 @@ Stacks on PR #13 (`feat/ais-source-abstraction-noaa-probe`, approved,
 unmerged) — this PR's diff/base targets that branch until #13 merges.
 Evidence: maritime-pipeline-v2 #14, PR #16 (branch
 `feat/aisstream-live-source`).
+
+## 2026-07-26 — Cron re-enabled with failure alerting (#10 final step)
+
+Decision (Leo approved): re-enable the daily `pipeline.yml` schedule now that the
+"yesterday" default (the April root cause — NOAA lags months behind, so
+`--year/--month/--day`-less "yesterday" 404s every day) has been replaced by the
+availability-aware default from #10/#13 — `resolve_dates_to_process()` with no
+explicit date args probes `NoaaMarineCadastreSource.latest_available_date()` and
+ingests the single most recent published date, never a blind "yesterday" guess.
+
+Changes: `.github/workflows/pipeline.yml` — schedule restored (`0 3 * * *`
+daily), a `concurrency` group added to prevent overlapping scheduled runs, and a
+new `alert-on-failure` job (`needs: [etl-pipeline, deploy-pages]`, `if:
+failure()`) that comments on issue #10 with the failing run URL via
+SHA-pinned `actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea`
+(v7.0.1). Scheduled/manual runs with no date inputs already call `uv run
+python -m src.ingest_motherduck` with no args, which now resolves to the
+availability-aware default — no workflow-side date logic needed.
+
+MotherDuck/dbt/Evidence steps untouched. No pipeline execution or MotherDuck
+writes from this change — Leo merges and #10 closes on the first clean
+scheduled run.
+Evidence: maritime-pipeline-v2 #10, PR (branch `feat/reenable-cron`).
